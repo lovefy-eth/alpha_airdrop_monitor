@@ -165,6 +165,7 @@ async fn main() {
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
     let tg_chat_id = std::env::var("TG_CHAT_ID").unwrap()
         .parse::<i64>().unwrap();
+    let wx_webhook_url = std::env::var("WX_WEBHOOK_URL");
     match cmd {
         Command::Ping => {
             bot.send_message(msg.chat.id, "pong（在线）").await?;
@@ -174,6 +175,11 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
         }
         Command::MsgTest => {
             bot.send_message(ChatId(tg_chat_id), "这是一个频道消息测试").await?;
+            if let Ok(webhook_url) = wx_webhook_url {
+                send_wechat_message(&webhook_url, "这是一个微信消息测试").await?;
+            } else {
+                bot.send_message(msg.chat.id, "未设置 WX_WEBHOOK_URL 环境变量，跳过微信消息发送").await?;
+            }
         }
         Command::Airdrops => {
             match fetch_airdrops().await {
