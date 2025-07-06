@@ -42,7 +42,7 @@ struct TextContent {
 }
 
 #[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "可用命令:")]
+#[command(rename_rule = "lowercase", description = "版本(v1.0.0)可用命令:")]
 enum Command {
     #[command(description = "判断机器人是否在线")]
     Ping,
@@ -67,6 +67,32 @@ fn load_env() {
         
     }
 }
+
+
+fn build_airdrop_message(config: &Config) -> String {
+    format!(
+        "📢 新空投上线: {}\n\
+        🪙 Token: {}\n\
+        🎁 空投量: {}\n\
+        📈 积分门槛: {}\n\
+        💸 积分消耗: {}\n\
+        📦 合约地址: {}\n\
+        🕒 开始时间: {}\n\
+        ⏳ 结束时间: {}\n\
+        🚦 状态: {}",
+        config.configName,
+        config.tokenSymbol,
+        config.airdropAmount,
+        config.pointsThreshold,
+        config.deductPoints,
+        config.contractAddress,
+        format_timestamp(config.claimStartTime),
+        format_timestamp(config.claimEndTime),
+        config.status
+    )
+}
+
+
 
 pub async fn send_wechat_message(webhook_url: &str, content: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
@@ -97,7 +123,7 @@ async fn main() {
     env_logger::init();
     log::info!("启动空投监控Bot");
     load_env();
-    log::info!("TELOXIDE_TOKEN: {:?}", std::env::var("TELOXIDE_TOKEN"));
+    log::debug!("TELOXIDE_TOKEN: {:?}", std::env::var("TELOXIDE_TOKEN"));
 
     let bot = Bot::from_env();
 
@@ -121,35 +147,47 @@ async fn main() {
             Ok(configs) => {
                 for config in configs {
                     if config.status != "ended" && !sent_ids.contains(&config.configId) {
-                        let msg = format!(
-                            "📢 新空投上线: {}\nToken: {}\n空投量: {}\n积分门槛：{}\n积分消耗：{}\n合约地址：{}\n开始时间: {}\n结束时间: {}\n状态: {}",
-                            config.configName,
-                            config.tokenSymbol,
-                            config.airdropAmount,
-                            config.pointsThreshold,
-                            config.deductPoints,
-                            config.contractAddress,
-                            format_timestamp(config.claimStartTime),
-                            format_timestamp(config.claimEndTime),
-                            config.status
-                        );
+                        let msg = build_airdrop_message(&config);
 
-                        if let Err(err) = bot.send_message(ChatId(tg_chat_id), msg.clone()).await {
-                            log::error!("发送TG消息失败: {}", err);
-                        } else {
-                            sent_ids.insert(config.configId.clone());
-                        }
 
-                        // 发送微信 Webhook 消息（如果设置）
-                        if let Some(webhook_url) = wx_webhook_url.clone().ok() {
-                            // clone 一份 msg，给微信发
-                            let wechat_msg = msg.clone();
-                            if let Err(err) = send_wechat_message(&webhook_url,&wechat_msg).await {
-                                log::error!("❌ 发送微信消息失败: {}", err);
+                        let tg_future = bot.send_message(ChatId(tg_chat_id), msg.clone());
+
+                        let wx_webhook_url = wx_webhook_url.clone();
+                        let wx_future = async move {
+                            if let Ok(url) = wx_webhook_url {
+                                send_wechat_message(&url, &msg).await.ok();
+                            } else {
+                                ()
                             }
-                        } else {
-                            log::warn!("⚠️ 未设置 WX_WEBHOOK_URL 环境变量，跳过微信消息发送");
+                        };
+
+                        let (tg_result, _) = tokio::join!(tg_future, wx_future);
+                        match tg_result {
+                            Ok(_) => {
+                                log::info!("✅ 发送TG消息成功: {}", config.configName);
+                                sent_ids.insert(config.configId.clone());
+                            }
+                            Err(err) => {
+                                log::error!("❌ 发送TG消息失败: {}", err);
+                            }
                         }
+
+                        // if let Err(err) = bot.send_message(ChatId(tg_chat_id), msg.clone()).await {
+                        //     log::error!("发送TG消息失败: {}", err);
+                        // } else {
+                        //     sent_ids.insert(config.configId.clone());
+                        // }
+
+                        // // 发送微信 Webhook 消息（如果设置）
+                        // if let Some(webhook_url) = wx_webhook_url.clone().ok() {
+                        //     // clone 一份 msg，给微信发
+                        //     let wechat_msg = msg.clone();
+                        //     if let Err(err) = send_wechat_message(&webhook_url,&wechat_msg).await {
+                        //         log::error!("❌ 发送微信消息失败: {}", err);
+                        //     }
+                        // } else {
+                        //     log::warn!("⚠️ 未设置 WX_WEBHOOK_URL 环境变量，跳过微信消息发送");
+                        // }
                     }
                 }
             }
@@ -185,17 +223,8 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
                     if configs.is_empty() {
                         bot.send_message(msg.chat.id, "当前没有可用空投。").await?;
                     } else {
-                        let mut text = String::from("当前空投列表：\n");
-                        for config in configs.iter().take(10) { // 最多展示10个
-                            let line = format!(
-                                "• {} ({}): {} {}\n",
-                                config.configName,
-                                config.tokenSymbol,
-                                config.airdropAmount,
-                                config.status
-                            );
-                            text.push_str(&line);
-                        }
+                        let first = configs.first().unwrap();
+                        let text: String = build_airdrop_message(first);
                         bot.send_message(msg.chat.id, text).await?;
                     }
                 }
@@ -230,7 +259,7 @@ async fn fetch_airdrops() -> Result<Vec<Config>, reqwest::Error> {
     if let Ok(proxy_url) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("HTTP_PROXY")) {
         if let Ok(proxy) = Proxy::all(&proxy_url) {
             client_builder = client_builder.proxy(proxy);
-            log::info!("使用代理: {}", proxy_url);
+            //log::info!("使用代理: {}", proxy_url);
         } else {
             log::warn!("代理地址无效: {}", proxy_url);
         }
@@ -251,5 +280,8 @@ async fn fetch_airdrops() -> Result<Vec<Config>, reqwest::Error> {
         .await?;
     log::info!("获取到 {} 个空投配置", res.data.as_ref().map_or(0, |d| d.configs.len()));
 
-    Ok(res.data.map(|d| d.configs).unwrap_or_default())
+    Ok(res
+        .data
+        .map(|d| d.configs)
+        .unwrap_or_default())
 }
