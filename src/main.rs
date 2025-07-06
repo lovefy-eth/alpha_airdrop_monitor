@@ -176,9 +176,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
         Command::MsgTest => {
             bot.send_message(ChatId(tg_chat_id), "这是一个频道消息测试").await?;
             if let Ok(webhook_url) = wx_webhook_url {
-                send_wechat_message(&webhook_url, "这是一个微信消息测试").await?;
-            } else {
-                bot.send_message(msg.chat.id, "未设置 WX_WEBHOOK_URL 环境变量，跳过微信消息发送").await?;
+                send_wechat_message(&webhook_url, "这是一个微信消息测试").await.unwrap();
             }
         }
         Command::Airdrops => {
