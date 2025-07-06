@@ -1,9 +1,8 @@
 use teloxide::{prelude::*, types::UpdateKind};
-use dotenv::dotenv;
 
 #[tokio::main]
 async fn main() {
-    dotenv().ok();
+    dotenv::from_filename(".env.development.local").ok();
     let bot = Bot::from_env();
 
     // 手动实现 dispatcher 以处理频道消息
