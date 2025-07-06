@@ -37,13 +37,31 @@ enum Command {
     Ping,
     #[command(description = "显示帮助")]
     Help,
+    #[command(description = "获取当前空投列表")]
+    Airdrops,
 }
+
+fn load_env() {
+    // 先加载 .env
+    dotenv::from_filename(".env").ok();
+    println!("加载环境变量: {:?}", std::env::var("RUST_ENV"));
+    if std::env::var("RUST_ENV").unwrap_or_default() == "development" {
+        // 如果是开发环境，加载 .env.development
+        dotenv::from_filename(".env.development.local").ok();
+    } else {
+        // 否则加载 .env.production
+        dotenv::from_filename(".env.production.local").ok();
+        
+    }
+}
+
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
     log::info!("启动空投监控Bot");
-    dotenv().ok();
+    load_env();
+    log::info!("TELOXIDE_TOKEN: {:?}", std::env::var("TELOXIDE_TOKEN"));
 
     let bot = Bot::from_env();
 
@@ -95,7 +113,32 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
             bot.send_message(msg.chat.id, "pong（在线）").await?;
         }
         Command::Help => {
-            bot.send_message(msg.chat.id, "没有帮助").await?;
+            bot.send_message(msg.chat.id, "/ping 是否在线\n/airdrops 获取最近空投列表\n").await?;
+        }
+        Command::Airdrops => {
+            match fetch_airdrops().await {
+                Ok(configs) => {
+                    if configs.is_empty() {
+                        bot.send_message(msg.chat.id, "当前没有可用空投。").await?;
+                    } else {
+                        let mut text = String::from("当前空投列表：\n");
+                        for config in configs.iter().take(10) { // 最多展示10个
+                            let line = format!(
+                                "• {} ({}): {} {}\n",
+                                config.configName,
+                                config.tokenSymbol,
+                                config.airdropAmount,
+                                config.status
+                            );
+                            text.push_str(&line);
+                        }
+                        bot.send_message(msg.chat.id, text).await?;
+                    }
+                }
+                Err(err) => {
+                    bot.send_message(msg.chat.id, format!("获取空投信息失败: {}", err)).await?;
+                }
+            }
         }
     }
     Ok(())
