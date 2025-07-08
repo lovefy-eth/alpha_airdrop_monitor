@@ -2,8 +2,6 @@ use serde::{Deserialize,Serialize};
 use std::{collections::HashSet, time::Duration};
 use teloxide::{prelude::*, types::ChatId, utils::command::BotCommands};
 
-const API_URL: &str = "https://www.binance.info/bapi/defi/v1/friendly/wallet-direct/buw/growth/query-alpha-airdrop";
-//const TG_CHAT_ID: i64 = -1002842249933; // 替换为你的频道 Chat ID
 const INTERVAL_SECS: u64 = 30; // 检查间隔时间（秒）
 
 #[derive(Debug, Deserialize)]
@@ -171,23 +169,6 @@ async fn main() {
                                 log::error!("❌ 发送TG消息失败: {}", err);
                             }
                         }
-
-                        // if let Err(err) = bot.send_message(ChatId(tg_chat_id), msg.clone()).await {
-                        //     log::error!("发送TG消息失败: {}", err);
-                        // } else {
-                        //     sent_ids.insert(config.configId.clone());
-                        // }
-
-                        // // 发送微信 Webhook 消息（如果设置）
-                        // if let Some(webhook_url) = wx_webhook_url.clone().ok() {
-                        //     // clone 一份 msg，给微信发
-                        //     let wechat_msg = msg.clone();
-                        //     if let Err(err) = send_wechat_message(&webhook_url,&wechat_msg).await {
-                        //         log::error!("❌ 发送微信消息失败: {}", err);
-                        //     }
-                        // } else {
-                        //     log::warn!("⚠️ 未设置 WX_WEBHOOK_URL 环境变量，跳过微信消息发送");
-                        // }
                     }
                 }
             }
@@ -271,8 +252,10 @@ async fn fetch_airdrops() -> Result<Vec<Config>, reqwest::Error> {
         "rows": 20
     });
 
+    let api_url = std::env::var("BN_API_URL").expect("请设置 BN_API_URL 环境变量");
+
     let res = client
-        .post(API_URL)
+        .post(api_url)
         .json(&body)
         .send()
         .await?
