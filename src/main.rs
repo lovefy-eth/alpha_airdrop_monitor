@@ -1,6 +1,8 @@
 use serde::{Deserialize,Serialize};
 use std::{collections::HashSet, time::Duration};
 use teloxide::{prelude::*, types::ChatId, utils::command::BotCommands};
+use once_cell::sync::Lazy;
+use std::env;
 
 const INTERVAL_SECS: u64 = 30; // 检查间隔时间（秒）
 
@@ -52,10 +54,27 @@ enum Command {
     MsgTest,
 }
 
+pub static BN_API_URL: Lazy<String> = Lazy::new(|| {
+    env::var("BN_API_URL").expect("请设置 BN_API_URL 环境变量")
+});
+
+pub static TG_CHAT_ID: Lazy<i64> = Lazy::new(|| {
+    env::var("TG_CHAT_ID").expect("请设置 TG_CHAT_ID 环境变量")
+        .parse::<i64>()
+        .expect("TG_CHAT_ID 必须是有效的 i64")
+});
+
+pub static WX_WEBHOOK_URL: Lazy<Option<String>> = Lazy::new(|| {
+    env::var("WX_WEBHOOK_URL").ok().map(String::from)
+});
+
+const TG_DEV_CHAT_ID: i64 = 962210352; // 对一些特殊测试命令只对指定TG用户开放
+
+
 fn load_env() {
     // 先加载 .env
     dotenv::from_filename(".env").ok();
-    println!("加载环境变量: {:?}", std::env::var("RUST_ENV"));
+    log::info!("加载环境变量: {:?}", std::env::var("RUST_ENV"));
     if std::env::var("RUST_ENV").unwrap_or_default() == "development" {
         // 如果是开发环境，加载 .env.development
         dotenv::from_filename(".env.development.local").ok();
@@ -108,9 +127,9 @@ pub async fn send_wechat_message(webhook_url: &str, content: &str) -> Result<(),
         .await?;
 
     if res.status().is_success() {
-        println!("✅ 微信消息已发送");
+        log::info!("✅ 微信消息已发送");
     } else {
-        eprintln!("❌ 微信消息发送失败，状态码：{}", res.status());
+        log::error!("❌ 微信消息发送失败，状态码：{}", res.status());
     }
 
     Ok(())
@@ -133,12 +152,7 @@ async fn main() {
 
     let mut sent_ids = HashSet::new();
 
-    let tg_chat_id = std::env::var("TG_CHAT_ID")
-        .expect("请设置 TG_CHAT_ID 环境变量")
-        .parse::<i64>()
-        .expect("TG_CHAT_ID 必须是有效的 i64");
-    let wx_webhook_url = std::env::var("WX_WEBHOOK_URL");
-
+    let tg_chat_id = TG_CHAT_ID.clone();
 
     loop {
         match fetch_airdrops().await {
@@ -150,9 +164,9 @@ async fn main() {
 
                         let tg_future = bot.send_message(ChatId(tg_chat_id), msg.clone());
 
-                        let wx_webhook_url = wx_webhook_url.clone();
+                        let wx_webhook_url = WX_WEBHOOK_URL.clone();
                         let wx_future = async move {
-                            if let Ok(url) = wx_webhook_url {
+                            if let Some(url) = wx_webhook_url {
                                 send_wechat_message(&url, &msg).await.ok();
                             } else {
                                 ()
@@ -182,9 +196,6 @@ async fn main() {
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
-    let tg_chat_id = std::env::var("TG_CHAT_ID").unwrap()
-        .parse::<i64>().unwrap();
-    let wx_webhook_url = std::env::var("WX_WEBHOOK_URL");
     match cmd {
         Command::Ping => {
             bot.send_message(msg.chat.id, "pong（在线）").await?;
@@ -193,10 +204,15 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
             bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?;
         }
         Command::MsgTest => {
-            bot.send_message(ChatId(tg_chat_id), "这是一个频道消息测试").await?;
-            if let Ok(webhook_url) = wx_webhook_url {
-                send_wechat_message(&webhook_url, "这是一个微信消息测试").await.unwrap();
+            if msg.chat.id==ChatId(TG_DEV_CHAT_ID) { //只对指定ID开放频道消息测试
+                bot.send_message(ChatId(TG_CHAT_ID.clone()), "这是一个频道消息测试").await?;
+                if let Some(webhook_url) = WX_WEBHOOK_URL.clone() {
+                    send_wechat_message(&webhook_url, "这是一个微信消息测试").await.unwrap();
+                } 
+            } else {
+                bot.send_message(msg.chat.id, "这是私人聊天测试").await?;
             }
+            
         }
         Command::Airdrops => {
             match fetch_airdrops().await {
@@ -252,10 +268,8 @@ async fn fetch_airdrops() -> Result<Vec<Config>, reqwest::Error> {
         "rows": 20
     });
 
-    let api_url = std::env::var("BN_API_URL").expect("请设置 BN_API_URL 环境变量");
-
     let res = client
-        .post(api_url)
+        .post(&*BN_API_URL)
         .json(&body)
         .send()
         .await?
